@@ -79,12 +79,12 @@
   }
   function dateLabel(iso) {
     if (!iso) return "";
-    const date = new Date(`${iso}T12:00:00`);
-    if (iso === todayISO()) return "Today";
+    const date = new Date(iso.length === 10 ? `${iso}T12:00:00` : iso);
+    if (iso.slice(0, 10) === todayISO()) return `Today${iso.length > 10 ? ` · ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`;
     const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowISO = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
-    if (iso === tomorrowISO) return "Tomorrow";
-    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (iso.slice(0, 10) === tomorrowISO) return `Tomorrow${iso.length > 10 ? ` · ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`;
+    return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}${iso.length > 10 ? ` · ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`;
   }
   function notify(message) {
     const toast = $("#toast");
@@ -115,8 +115,8 @@
     let tasks = [...state.tasks];
     const search = $("#searchInput").value.trim().toLowerCase();
     if (currentListId) tasks = tasks.filter((task) => task.listId === currentListId);
-    else if (currentView === "today") tasks = tasks.filter((task) => task.due === todayISO() && !task.done);
-    else if (currentView === "upcoming") tasks = tasks.filter((task) => task.due && task.due > todayISO() && !task.done);
+    else if (currentView === "today") tasks = tasks.filter((task) => task.due && task.due.slice(0, 10) === todayISO() && !task.done);
+    else if (currentView === "upcoming") tasks = tasks.filter((task) => task.due && task.due.slice(0, 10) > todayISO() && !task.done);
     else if (currentView === "completed") tasks = tasks.filter((task) => task.done);
     if (search) tasks = tasks.filter((task) => {
       const listName = listById(task.listId)?.name || "";
@@ -136,7 +136,7 @@
   function renderSidebar() {
     const openTasks = state.tasks.filter((task) => !task.done).length;
     $("#allCount").textContent = openTasks;
-    $("#todayCount").textContent = state.tasks.filter((task) => !task.done && task.due === todayISO()).length;
+    $("#todayCount").textContent = state.tasks.filter((task) => !task.done && task.due && task.due.slice(0, 10) === todayISO()).length;
     $("#listNav").innerHTML = state.lists.map((list) => {
       const count = countForList(list.id);
       return `<button class="list-link ${list.id === currentListId ? "active" : ""}" data-list-id="${escapeHTML(list.id)}"><span class="list-color" style="background:${escapeHTML(list.color)}"></span><span>${escapeHTML(list.name)}</span><span class="list-link-count">${count.open || ""}</span></button>`;
@@ -171,7 +171,7 @@
       $("#heroImage").style.backgroundImage = info.list.cover ? `url("${info.list.cover.data}")` : `linear-gradient(120deg, ${info.list.color}, #f3f3ed)`;
       $("#heroShade").style.backgroundImage = "none";
     }
-    const allForCurrent = state.tasks.filter((task) => currentListId ? task.listId === currentListId : currentView === "today" ? task.due === todayISO() && !task.done : currentView === "upcoming" ? task.due && task.due > todayISO() && !task.done : currentView === "completed" ? task.done : true);
+    const allForCurrent = state.tasks.filter((task) => currentListId ? task.listId === currentListId : currentView === "today" ? task.due && task.due.slice(0, 10) === todayISO() && !task.done : currentView === "upcoming" ? task.due && task.due.slice(0, 10) > todayISO() && !task.done : currentView === "completed" ? task.done : true);
     const doneCount = allForCurrent.filter((task) => task.done).length;
     const openCount = allForCurrent.length - doneCount;
     $("#openCount").textContent = openCount;
@@ -260,6 +260,19 @@
       notify(`${loaded.length} image${loaded.length === 1 ? "" : "s"} added`);
     } catch (error) { notify(error.message || "Could not add image."); }
   }
+  const webReminderTimers = new Map();
+  async function scheduleWebReminder(task) {
+    const old = webReminderTimers.get(task.id); if (old) clearTimeout(old);
+    if (!task.due || task.done || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") {
+      if (Notification.permission === "default") { try { await Notification.requestPermission(); } catch {} }
+      if (Notification.permission !== "granted") return;
+    }
+    const delay = new Date(task.due).getTime() - Date.now();
+    if (delay <= 0 || delay > 2147480000) return;
+    const timer = setTimeout(() => { try { new Notification("Daymark reminder", { body: task.title, icon: "./icon-192.png", tag: `daymark-${task.id}` }); } catch {} }, delay);
+    webReminderTimers.set(task.id, timer);
+  }
   async function saveTask(event) {
     event.preventDefault();
     const title = $("#taskTitle").value.trim();
@@ -268,7 +281,10 @@
     if (!data.listId) return notify("Create a list first.");
     if (editingTaskId) state.tasks = state.tasks.map((task) => task.id === editingTaskId ? data : task);
     else state.tasks.unshift(data);
-    try { await persist(); $("#taskDialog").close(); render(); notify(editingTaskId ? "Task updated" : "Task added"); }
+    try { await persist();
+      if (window.DaymarkNotifications) await window.DaymarkNotifications.schedule(data);
+      else scheduleWebReminder(data);
+      $("#taskDialog").close(); render(); notify(editingTaskId ? "Task updated" : "Task added"); }
     catch { notify("Storage is full. Export a backup and remove some large images."); }
   }
   async function saveList(event) {
@@ -293,6 +309,8 @@
     task.done = done;
     task.updatedAt = Date.now();
     await persist();
+    if (window.DaymarkNotifications) await window.DaymarkNotifications.cancel(id);
+    const timer = webReminderTimers.get(id); if (timer) clearTimeout(timer);
     render();
     if (done) notify("Nicely done ✨");
   }
@@ -300,6 +318,8 @@
     const task = taskById(id);
     if (!task || !confirm(`Delete “${task.title}”?`)) return;
     state.tasks = state.tasks.filter((item) => item.id !== id);
+    if (window.DaymarkNotifications) await window.DaymarkNotifications.cancel(id);
+    const timer = webReminderTimers.get(id); if (timer) clearTimeout(timer);
     await persist(); render(); notify("Task deleted");
   }
   async function deleteCurrentList() {
@@ -357,8 +377,18 @@
   }
 
   document.addEventListener("click", async (event) => {
-    const target = event.target.closest("button, label");
+    // Close sidebar when tapping the dimmed overlay or empty main area (mobile)
+    if (event.target.id === "mobileScrim") {
+      closeSidebar();
+      return;
+    }
+    const sidebarOpen = $("#sidebar").classList.contains("open");
+    if (sidebarOpen && !$("#sidebar").contains(event.target) && event.target.id !== "menuButton") {
+      closeSidebar();
+    }
+    const target = event.target.closest("button, label, a");
     if (!target) return;
+    if (target.closest(".topbar-brand")) { event.preventDefault(); return; }
     if (target.dataset.close) { $("#" + target.dataset.close).close(); return; }
     if (target.dataset.view) { setView(target.dataset.view); return; }
     if (target.dataset.listId) { currentListId = target.dataset.listId; currentView = "all"; taskFilter = "open"; render(); closeSidebar(); return; }
@@ -374,7 +404,6 @@
     if (target.id === "searchButton") { $("#searchRow").classList.remove("hidden"); $("#searchInput").focus(); return; }
     if (target.id === "closeSearch") { $("#searchInput").value = ""; $("#searchRow").classList.add("hidden"); render(); return; }
     if (target.id === "menuButton") { openSidebar(); return; }
-    if (target.id === "mobileScrim") { closeSidebar(); return; }
     if (target.id === "workspaceButton") { notify("Your lists are saved privately in this browser."); return; }
   });
   document.addEventListener("change", async (event) => {
@@ -403,7 +432,11 @@
     if (event.key === "Escape") closeSidebar();
   });
 
-  load().then(render).catch((error) => {
+  window.addEventListener("daymark-native-ready", () => { if (db) window.DaymarkNotifications.sync(state.tasks); });
+  load().then(async () => { render();
+    if (window.DaymarkNotifications) await window.DaymarkNotifications.sync(state.tasks);
+    else state.tasks.forEach(scheduleWebReminder);
+  }).catch((error) => {
     console.error(error);
     $("#pageTitle").textContent = "Storage unavailable";
     $("#pageDescription").textContent = "Please open this site in a modern browser with local storage enabled.";

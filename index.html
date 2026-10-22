@@ -36,6 +36,10 @@
     <main class="main-content">
       <header class="topbar">
         <button class="icon-button mobile-menu" id="menuButton" aria-label="Open menu">☰</button>
+        <a class="topbar-brand" href="#" aria-label="Daymark home">
+          <span class="brand-mark">d.</span>
+          <span class="topbar-brand-name">daymark</span>
+        </a>
         <div class="breadcrumbs"><span>Personal space</span><span class="crumb-divider">/</span><strong id="breadcrumbCurrent">All tasks</strong></div>
         <div class="top-actions">
           <button class="icon-button" id="searchButton" aria-label="Search tasks" title="Search">⌕</button>
@@ -109,7 +113,7 @@
       <textarea class="text-field" id="taskNotes" rows="3" maxlength="2000" placeholder="Add a few details…"></textarea>
       <div class="field-grid">
         <div><label class="field-label" for="taskListSelect">List</label><select class="text-field" id="taskListSelect"></select></div>
-        <div><label class="field-label" for="taskDue">Due date</label><input class="text-field" id="taskDue" type="date"></div>
+        <div><label class="field-label" for="taskDue">Date &amp; time</label><input class="text-field" id="taskDue" type="datetime-local"><p class="field-hint">A reminder is scheduled when notifications are enabled.</p></div>
       </div>
       <div class="attachment-area"><div><label class="field-label">Attachments <span class="optional">Images</span></label><p class="field-hint">Add reference photos or screenshots.</p></div><label class="upload-button">＋ Add images<input id="taskImages" type="file" accept="image/*" multiple hidden></label></div>
       <div class="attachment-preview" id="taskAttachmentPreview"></div>
@@ -142,6 +146,7 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="./app.js"></script>
+  <script type="module" src="./native-notifications.js"></script>
   <script>
     if ("serviceWorker" in navigator && location.protocol !== "file:") {
       window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
