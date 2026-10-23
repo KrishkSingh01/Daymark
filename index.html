@@ -23,7 +23,7 @@
         <button class="nav-item" data-view="completed"><span class="nav-icon">✓</span> Completed</button>
       </nav>
       <div class="sidebar-section">
-        <div class="section-label"><span>YOUR LISTS</span><button class="icon-button small" id="addListSide" aria-label="Create list">＋</button></div>
+        <div class="section-label"><span>YOUR LISTS</span><button class="icon-button small" id="addListSide" aria-label="Create list" title="Create list">＋</button></div>
         <div id="listNav" class="list-nav"></div>
       </div>
       <div class="sidebar-bottom">
@@ -58,17 +58,26 @@
         </div>
 
         <div id="searchRow" class="search-row hidden">
-          <span>⌕</span><input id="searchInput" placeholder="Search tasks and lists…" autocomplete="off">
+          <span>⌕</span><input id="searchInput" placeholder="Search tasks, notes, or lists…" autocomplete="off">
           <button class="icon-button small" id="closeSearch" aria-label="Close search">×</button>
         </div>
 
+        <!-- List Hero Top Banner above the Notes & Tasks -->
         <section id="listHero" class="list-hero hidden">
           <div class="hero-image" id="heroImage"></div>
           <div class="hero-shade"></div>
           <div class="hero-content">
             <div class="hero-icon" id="heroIcon">✦</div>
-            <div class="hero-text"><div class="hero-kicker">YOUR COLLECTION</div><h2 id="heroTitle">My list</h2><p id="heroSubtitle">A place for what matters.</p></div>
-            <button class="glass-button" id="editListButton">Edit list ↗</button>
+            <div class="hero-text">
+              <div class="hero-kicker">ACTIVE LIST</div>
+              <h2 id="heroTitle">My list</h2>
+              <p id="heroSubtitle">A place for what matters.</p>
+            </div>
+            <!-- Action buttons on top of notes to edit & delete the list -->
+            <div class="hero-actions">
+              <button class="glass-button" id="editListButton" title="Edit list name or color">✎ Edit list</button>
+              <button class="glass-button danger-glass" id="deleteListButton" title="Delete this list">🗑 Delete list</button>
+            </div>
           </div>
         </section>
 
@@ -104,31 +113,91 @@
 
   <div class="mobile-scrim" id="mobileScrim"></div>
 
+  <!-- Task Dialog with Modern Schedule & Time Box -->
   <dialog class="modal" id="taskDialog">
     <form id="taskForm" method="dialog">
-      <div class="modal-header"><div><div class="eyebrow">MAKE IT HAPPEN</div><h2 id="taskDialogTitle">New task</h2></div><button type="button" class="icon-button" data-close="taskDialog" aria-label="Close">×</button></div>
-      <label class="field-label" for="taskTitle">Task name <span>*</span></label>
-      <input class="text-field title-field" id="taskTitle" maxlength="180" placeholder="What would you like to do?" required>
-      <label class="field-label" for="taskNotes">Notes <span class="optional">Optional</span></label>
-      <textarea class="text-field" id="taskNotes" rows="3" maxlength="2000" placeholder="Add a few details…"></textarea>
-      <div class="field-grid">
-        <div><label class="field-label" for="taskListSelect">List</label><select class="text-field" id="taskListSelect"></select></div>
-        <div><label class="field-label" for="taskDue">Date &amp; time</label><input class="text-field" id="taskDue" type="datetime-local"><p class="field-hint">A reminder is scheduled when notifications are enabled.</p></div>
+      <div class="modal-header">
+        <div>
+          <div class="eyebrow">TASK DETAILS</div>
+          <h2 id="taskDialogTitle">New task</h2>
+        </div>
+        <button type="button" class="icon-button" data-close="taskDialog" aria-label="Close">×</button>
       </div>
-      <div class="attachment-area"><div><label class="field-label">Attachments <span class="optional">Images</span></label><p class="field-hint">Add reference photos or screenshots.</p></div><label class="upload-button">＋ Add images<input id="taskImages" type="file" accept="image/*" multiple hidden></label></div>
+
+      <label class="field-label" for="taskTitle">Task title <span>*</span></label>
+      <input class="text-field title-field" id="taskTitle" maxlength="180" placeholder="What would you like to do?" required>
+
+      <label class="field-label" for="taskNotes">Notes <span class="optional">Optional</span></label>
+      <textarea class="text-field" id="taskNotes" rows="3" maxlength="2000" placeholder="Add descriptions, checklists, links or details…"></textarea>
+
+      <label class="field-label" for="taskListSelect">Save to list</label>
+      <select class="text-field" id="taskListSelect"></select>
+
+      <!-- Clean & Fixed Due Date and Time Box -->
+      <div class="schedule-box">
+        <div class="schedule-box-header">
+          <span class="schedule-icon">⏰</span>
+          <strong>Due Date &amp; Time</strong>
+          <button type="button" class="text-action-button" id="clearDueButton">Clear</button>
+        </div>
+
+        <div class="schedule-fields-row">
+          <div class="schedule-field-col">
+            <label class="sub-label" for="dueDateInput">Date</label>
+            <input class="text-field date-field" id="dueDateInput" type="date">
+            <div class="quick-chips">
+              <button type="button" class="chip-button" id="quickToday">Today</button>
+              <button type="button" class="chip-button" id="quickTomorrow">Tomorrow</button>
+            </div>
+          </div>
+          <div class="schedule-field-col">
+            <label class="sub-label" for="dueTimeInput">Time</label>
+            <input class="text-field time-field" id="dueTimeInput" type="time">
+            <div class="quick-chips">
+              <button type="button" class="chip-button" data-preset-time="09:00">9:00 AM</button>
+              <button type="button" class="chip-button" data-preset-time="13:00">1:00 PM</button>
+              <button type="button" class="chip-button" data-preset-time="18:00">6:00 PM</button>
+              <button type="button" class="chip-button" data-preset-time="21:00">9:00 PM</button>
+            </div>
+          </div>
+        </div>
+        <input type="hidden" id="taskDue">
+      </div>
+
+      <div class="attachment-area">
+        <div>
+          <label class="field-label">Attachments <span class="optional">Images</span></label>
+          <p class="field-hint">Add reference photos or screenshots.</p>
+        </div>
+        <label class="upload-button">＋ Add images<input id="taskImages" type="file" accept="image/*" multiple hidden></label>
+      </div>
       <div class="attachment-preview" id="taskAttachmentPreview"></div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close="taskDialog">Cancel</button><button class="primary-button" type="submit">Save task <span>→</span></button></div>
+
+      <div class="modal-footer">
+        <button type="button" class="secondary-button" data-close="taskDialog">Cancel</button>
+        <button class="primary-button" type="submit">Save task <span>→</span></button>
+      </div>
     </form>
   </dialog>
 
+  <!-- List Dialog with Delete Option -->
   <dialog class="modal" id="listDialog">
     <form id="listForm" method="dialog">
-      <div class="modal-header"><div><div class="eyebrow">MAKE IT YOURS</div><h2 id="listDialogTitle">Create a list</h2></div><button type="button" class="icon-button" data-close="listDialog" aria-label="Close">×</button></div>
+      <div class="modal-header">
+        <div>
+          <div class="eyebrow">CUSTOMIZE COLLECTION</div>
+          <h2 id="listDialogTitle">Create a list</h2>
+        </div>
+        <button type="button" class="icon-button" data-close="listDialog" aria-label="Close">×</button>
+      </div>
+
       <label class="field-label" for="listName">List name <span>*</span></label>
-      <input class="text-field title-field" id="listName" maxlength="80" placeholder="e.g. Reading, Projects, Life" required>
+      <input class="text-field title-field" id="listName" maxlength="80" placeholder="e.g. Work, Ideas, Fitness, Groceries" required>
+
       <label class="field-label" for="listDescription">Description <span class="optional">Optional</span></label>
       <input class="text-field" id="listDescription" maxlength="180" placeholder="What is this list for?">
-      <label class="field-label">Choose a colour</label>
+
+      <label class="field-label">Theme accent color</label>
       <div class="color-options" id="colorOptions">
         <label><input type="radio" name="listColor" value="#D9E7DA" checked><span style="--swatch:#D9E7DA"></span></label>
         <label><input type="radio" name="listColor" value="#DCE7F8"><span style="--swatch:#DCE7F8"></span></label>
@@ -137,10 +206,20 @@
         <label><input type="radio" name="listColor" value="#F2E9C9"><span style="--swatch:#F2E9C9"></span></label>
         <label><input type="radio" name="listColor" value="#D7ECE9"><span style="--swatch:#D7ECE9"></span></label>
       </div>
-      <label class="field-label">Cover image <span class="optional">Optional</span></label>
-      <div class="cover-picker" id="coverPicker"><div class="cover-placeholder">▧</div><div><strong>Choose a cover image</strong><small>Use a photo from your device</small></div><label class="upload-button">Browse<input id="listCover" type="file" accept="image/*" hidden></label></div>
+
+      <label class="field-label">Cover banner <span class="optional">Optional</span></label>
+      <div class="cover-picker" id="coverPicker">
+        <div class="cover-placeholder">▧</div>
+        <div><strong>Choose a cover banner</strong><small>Upload an image from your device</small></div>
+        <label class="upload-button">Browse<input id="listCover" type="file" accept="image/*" hidden></label>
+      </div>
       <div class="cover-preview hidden" id="coverPreview"></div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close="listDialog">Cancel</button><button class="primary-button" type="submit">Save list <span>→</span></button></div>
+
+      <div class="modal-footer">
+        <button type="button" class="danger-button hidden" id="modalDeleteListBtn">🗑 Delete list</button>
+        <button type="button" class="secondary-button" data-close="listDialog">Cancel</button>
+        <button class="primary-button" type="submit">Save list <span>→</span></button>
+      </div>
     </form>
   </dialog>
 
