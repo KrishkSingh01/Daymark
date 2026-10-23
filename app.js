@@ -1,21 +1,114 @@
 (() => {
   "use strict";
+
   const DB_NAME = "daymark-local-v1";
   const DB_VERSION = 1;
   const STORE = "records";
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
+
   const uid = () => {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
-    return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      try { return window.crypto.randomUUID(); } catch (_) {}
+    }
+    return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
   };
+
   const todayISO = () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   };
 
-  let db;
+  // Cross-browser safe ISO string parser
+  function parseISODate(iso) {
+    if (!iso) return null;
+    const parts = iso.split(/[-T:]/);
+    if (parts.length >= 3) {
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const d = parseInt(parts[2], 10);
+      const hh = parts[3] ? parseInt(parts[3], 10) : 12;
+      const mm = parts[4] ? parseInt(parts[4], 10) : 0;
+      return new Date(y, m, d, hh, mm);
+    }
+    return new Date(iso);
+  }
+
+  /* Universal Fallback Storage Driver (IndexedDB -> localStorage -> Memory) */
+  const Storage = {
+    mode: "idb",
+    mem: {},
+    async init() {
+      try {
+        if (!("indexedDB" in window)) throw new Error("IndexedDB not supported");
+        await new Promise((resolve, reject) => {
+          const req = indexedDB.open(DB_NAME, DB_VERSION);
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: "key" });
+          };
+          req.onsuccess = () => { req.result.close(); resolve(); };
+          req.onerror = () => reject(req.error);
+        });
+        this.mode = "idb";
+      } catch (e) {
+        try {
+          localStorage.setItem("__test", "1");
+          localStorage.removeItem("__test");
+          this.mode = "local";
+        } catch (_) {
+          this.mode = "mem";
+        }
+      }
+    },
+    async get(key) {
+      if (this.mode === "idb") {
+        return new Promise((resolve) => {
+          const req = indexedDB.open(DB_NAME, DB_VERSION);
+          req.onsuccess = () => {
+            const db = req.result;
+            const tx = db.transaction(STORE, "readonly");
+            const getReq = tx.objectStore(STORE).get(key);
+            getReq.onsuccess = () => resolve(getReq.result ? getReq.result.value : null);
+            getReq.onerror = () => resolve(null);
+          };
+          req.onerror = () => resolve(null);
+        });
+      }
+      if (this.mode === "local") {
+        try {
+          const val = localStorage.getItem(`daymark_${key}`);
+          return val ? JSON.parse(val) : null;
+        } catch (_) { return null; }
+      }
+      return this.mem[key] || null;
+    },
+    async set(key, value) {
+      if (this.mode === "idb") {
+        return new Promise((resolve, reject) => {
+          const req = indexedDB.open(DB_NAME, DB_VERSION);
+          req.onsuccess = () => {
+            const db = req.result;
+            const tx = db.transaction(STORE, "readwrite");
+            tx.objectStore(STORE).put({ key, value });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          };
+          req.onerror = () => reject(req.error);
+        });
+      }
+      if (this.mode === "local") {
+        try {
+          localStorage.setItem(`daymark_${key}`, JSON.stringify(value));
+          return;
+        } catch (e) { throw e; }
+      }
+      this.mem[key] = value;
+    }
+  };
+
   let state = { lists: [], tasks: [] };
   let currentView = "all";
   let currentListId = null;
@@ -26,43 +119,18 @@
   let listDraftCover = null;
   let toastTimer;
 
-  function openDB() {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const database = request.result;
-        if (!database.objectStoreNames.contains(STORE)) database.createObjectStore(STORE, { keyPath: "key" });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-  function readRecord(key) {
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, "readonly");
-      const req = tx.objectStore(STORE).get(key);
-      req.onsuccess = () => resolve(req.result ? req.result.value : null);
-      req.onerror = () => reject(req.error);
-    });
-  }
-  function writeRecord(key, value) {
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).put({ key, value });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error || new Error("Storage transaction aborted"));
-    });
-  }
   async function persist() {
-    await writeRecord("lists", state.lists);
-    await writeRecord("tasks", state.tasks);
+    await Storage.set("lists", state.lists);
+    await Storage.set("tasks", state.tasks);
   }
+
   async function load() {
-    db = await openDB();
-    const [lists, tasks] = await Promise.all([readRecord("lists"), readRecord("tasks")]);
+    await Storage.init();
+    const [lists, tasks] = await Promise.all([Storage.get("lists"), Storage.get("tasks")]);
     state.lists = Array.isArray(lists) ? lists : [];
     state.tasks = Array.isArray(tasks) ? tasks : [];
+
+    // Ensure at least one default list always exists
     if (!state.lists.length) {
       state.lists = [
         { id: uid(), name: "Personal", description: "Little things that make life better.", color: "#D9E7DA", cover: null, createdAt: Date.now() },
@@ -74,31 +142,35 @@
   }
 
   function escapeHTML(value = "") {
-    return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+
   function listById(id) { return state.lists.find((list) => list.id === id); }
   function taskById(id) { return state.tasks.find((task) => task.id === id); }
   function countForList(id) {
     const tasks = state.tasks.filter((task) => task.listId === id);
-    return { all: tasks.length, open: tasks.filter((task) => !task.done).length, done: tasks.filter((task) => task.done).length };
+    return { all: tasks.length, open: tasks.filter((t) => !t.done).length, done: tasks.filter((t) => t.done).length };
   }
 
   function dateLabel(iso) {
     if (!iso) return "";
-    const date = new Date(iso.length === 10 ? `${iso}T12:00:00` : iso);
+    const date = parseISODate(iso);
+    if (!date || isNaN(date.getTime())) return "";
     const timeString = iso.length > 10 ? ` · ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })}` : "";
+    
     if (iso.slice(0, 10) === todayISO()) return `Today${timeString}`;
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowISO = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
     if (iso.slice(0, 10) === tomorrowISO) return `Tomorrow${timeString}`;
+    
     return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}${timeString}`;
   }
 
   function dateTimeLabel(timestamp) {
-    if (!timestamp) return "date unavailable";
+    if (!timestamp) return "recently";
     const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return "date unavailable";
+    if (Number.isNaN(date.getTime())) return "recently";
     try {
       return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", hour12: true }).format(date);
     } catch {
@@ -108,6 +180,7 @@
 
   function notify(message) {
     const toast = $("#toast");
+    if (!toast) return;
     toast.textContent = message;
     toast.classList.add("show");
     clearTimeout(toastTimer);
@@ -115,8 +188,8 @@
   }
 
   function setActiveNav() {
-    $$(".main-nav [data-view]").forEach((button) => button.classList.toggle("active", currentView === button.dataset.view && !currentListId));
-    $$("#listNav .list-link").forEach((button) => button.classList.toggle("active", button.dataset.listId === currentListId));
+    $$(".main-nav [data-view]").forEach((btn) => btn.classList.toggle("active", currentView === btn.dataset.view && !currentListId));
+    $$("#listNav .list-link").forEach((btn) => btn.classList.toggle("active", btn.dataset.listId === currentListId));
   }
 
   function getViewInfo() {
@@ -136,19 +209,22 @@
 
   function getVisibleTasks() {
     let tasks = [...state.tasks];
-    const search = $("#searchInput").value.trim().toLowerCase();
-    if (currentListId) tasks = tasks.filter((task) => task.listId === currentListId);
-    else if (currentView === "today") tasks = tasks.filter((task) => task.due && task.due.slice(0, 10) === todayISO() && !task.done);
-    else if (currentView === "upcoming") tasks = tasks.filter((task) => task.due && task.due.slice(0, 10) > todayISO() && !task.done);
-    else if (currentView === "completed") tasks = tasks.filter((task) => task.done);
+    const search = $("#searchInput")?.value.trim().toLowerCase() || "";
+    if (currentListId) tasks = tasks.filter((t) => t.listId === currentListId);
+    else if (currentView === "today") tasks = tasks.filter((t) => t.due && t.due.slice(0, 10) === todayISO() && !t.done);
+    else if (currentView === "upcoming") tasks = tasks.filter((t) => t.due && t.due.slice(0, 10) > todayISO() && !t.done);
+    else if (currentView === "completed") tasks = tasks.filter((t) => t.done);
+
     if (search) {
-      tasks = tasks.filter((task) => {
-        const listName = listById(task.listId)?.name || "";
-        return `${task.title} ${task.notes || ""} ${listName}`.toLowerCase().includes(search);
+      tasks = tasks.filter((t) => {
+        const listName = listById(t.listId)?.name || "";
+        return `${t.title} ${t.notes || ""} ${listName}`.toLowerCase().includes(search);
       });
     }
-    if (taskFilter === "open") tasks = tasks.filter((task) => !task.done);
-    else if (taskFilter === "done") tasks = tasks.filter((task) => task.done);
+
+    if (taskFilter === "open") tasks = tasks.filter((t) => !t.done);
+    else if (taskFilter === "done") tasks = tasks.filter((t) => t.done);
+
     tasks.sort((a, b) => {
       if (a.done !== b.done) return Number(a.done) - Number(b.done);
       if (a.due && b.due) return a.due.localeCompare(b.due) || a.createdAt - b.createdAt;
@@ -160,9 +236,9 @@
   }
 
   function renderSidebar() {
-    const openTasks = state.tasks.filter((task) => !task.done).length;
+    const openTasks = state.tasks.filter((t) => !t.done).length;
     $("#allCount").textContent = openTasks;
-    $("#todayCount").textContent = state.tasks.filter((task) => !task.done && task.due && task.due.slice(0, 10) === todayISO()).length;
+    $("#todayCount").textContent = state.tasks.filter((t) => !t.done && t.due && t.due.slice(0, 10) === todayISO()).length;
     $("#listNav").innerHTML = state.lists.map((list) => {
       const count = countForList(list.id);
       return `
@@ -183,13 +259,14 @@
     const due = task.due ? `<span class="due ${task.due < todayISO() && !task.done ? "overdue" : ""}">⏰ ${escapeHTML(dateLabel(task.due))}</span>` : "";
     const listPill = !currentListId && list ? `<span class="list-pill"><i style="background:${escapeHTML(list.color)}"></i>${escapeHTML(list.name)}</span>` : "";
     const notes = task.notes ? `<p class="task-notes">${escapeHTML(task.notes)}</p>` : "";
-    const images = task.images?.length ? `<div class="task-images">${task.images.map((image, index) => `<button type="button" data-image-task="${escapeHTML(task.id)}" data-image-index="${index}" aria-label="View attachment"><img src="${image.data}" alt="Attachment" loading="lazy"></button>`).join("")}</div>` : "";
+    const images = task.images?.length ? `<div class="task-images">${task.images.map((img, idx) => `<button type="button" data-image-task="${escapeHTML(task.id)}" data-image-index="${idx}" aria-label="View attachment"><img src="${img.data}" alt="Attachment" loading="lazy"></button>`).join("")}</div>` : "";
+    
     return `<article class="task-row ${task.done ? "is-done" : ""}" data-task-row="${escapeHTML(task.id)}">
       <input class="task-check" type="checkbox" aria-label="Mark complete" data-toggle-task="${escapeHTML(task.id)}" ${task.done ? "checked" : ""}>
       <div class="task-body">
         <span class="task-title">${escapeHTML(task.title)}</span>
         ${notes}
-        <div class="task-meta">${due}${listPill}<span class="created-at" title="When this task was added">Added ${escapeHTML(dateTimeLabel(task.createdAt))}</span></div>
+        <div class="task-meta">${due}${listPill}<span class="created-at">Added ${escapeHTML(dateTimeLabel(task.createdAt))}</span></div>
         ${images}
       </div>
       <div class="task-actions">
@@ -214,15 +291,14 @@
       $("#heroSubtitle").textContent = info.list.description || "A place for what matters.";
       $("#heroIcon").textContent = info.list.name.slice(0, 1).toUpperCase();
       $("#heroImage").style.backgroundImage = info.list.cover ? `url("${info.list.cover.data}")` : `linear-gradient(120deg, ${info.list.color}, #f3f3ed)`;
-      $("#heroShade").style.backgroundImage = "none";
     }
 
-    const allForCurrent = state.tasks.filter((task) => currentListId ? task.listId === currentListId : currentView === "today" ? task.due && task.due.slice(0, 10) === todayISO() && !task.done : currentView === "upcoming" ? task.due && task.due.slice(0, 10) > todayISO() && !task.done : currentView === "completed" ? task.done : true);
-    const doneCount = allForCurrent.filter((task) => task.done).length;
+    const allForCurrent = state.tasks.filter((t) => currentListId ? t.listId === currentListId : currentView === "today" ? t.due && t.due.slice(0, 10) === todayISO() && !t.done : currentView === "upcoming" ? t.due && t.due.slice(0, 10) > todayISO() && !t.done : currentView === "completed" ? t.done : true);
+    const doneCount = allForCurrent.filter((t) => t.done).length;
     const openCount = allForCurrent.length - doneCount;
     $("#openCount").textContent = openCount;
     $("#doneCount").textContent = doneCount;
-    const percent = allForCurrent.length ? Math.round(doneCount / allForCurrent.length * 100) : 0;
+    const percent = allForCurrent.length ? Math.round((doneCount / allForCurrent.length) * 100) : 0;
     $("#progressLabel").textContent = `${percent}% complete`;
     $("#progressBar").style.width = `${percent}%`;
 
@@ -231,17 +307,19 @@
     const empty = tasks.length === 0;
     $("#emptyState").classList.toggle("visible", empty);
     $("#addTaskRow").classList.toggle("hidden", empty && currentView === "completed" && !currentListId);
+
     if (empty) {
       $("#emptyTitle").textContent = $("#searchInput").value.trim() ? "No matches found" : currentView === "completed" ? "Nothing completed just yet" : "A clear space to begin";
-      $("#emptyDescription").textContent = $("#searchInput").value.trim() ? "Try another search term." : currentView === "completed" ? "Finished tasks will find their home here." : "Add a task and turn your plans into progress.";
+      $("#emptyDescription").textContent = $("#searchInput").value.trim() ? "Try another search term." : currentView === "completed" ? "Finished tasks will appear here." : "Add a task and turn your plans into progress.";
       $("#emptyAddButton").classList.toggle("hidden", currentView === "completed" && !currentListId);
     }
+
     $("#taskList").classList.toggle("hidden", empty);
     $("#viewTabs").classList.toggle("hidden", currentView === "today" || currentView === "upcoming" || currentView === "completed");
-    $$("#viewTabs [data-filter]").forEach((button) => button.classList.toggle("active", button.dataset.filter === taskFilter));
+    $$("#viewTabs [data-filter]").forEach((b) => b.classList.toggle("active", b.dataset.filter === taskFilter));
   }
 
-  /* Reliable Date and Time Handling */
+  /* Reliable Cross-Browser Date and Time Handling */
   function setDueFields(isoString = "") {
     const dateInput = $("#dueDateInput");
     const timeInput = $("#dueTimeInput");
@@ -254,8 +332,7 @@
       return;
     }
     dateInput.value = isoString.slice(0, 10);
-    const timePart = isoString.length > 10 ? isoString.slice(11, 16) : "";
-    timeInput.value = timePart;
+    timeInput.value = isoString.length > 10 ? isoString.slice(11, 16) : "";
   }
 
   function getCombinedDueValue() {
@@ -263,11 +340,14 @@
     const time = $("#dueTimeInput").value;
     if (!date && !time) return "";
     const effectiveDate = date || todayISO();
-    if (!time) return effectiveDate;
-    return `${effectiveDate}T${time}`;
+    return time ? `${effectiveDate}T${time}` : effectiveDate;
   }
 
   function openTaskDialog(task = null) {
+    if (!state.lists.length) {
+      state.lists.push({ id: uid(), name: "Inbox", description: "General tasks", color: "#D9E7DA", cover: null, createdAt: Date.now() });
+      persist();
+    }
     editingTaskId = task?.id || null;
     taskDraftImages = task?.images ? [...task.images] : [];
     $("#taskDialogTitle").textContent = task ? "Edit task" : "New task";
@@ -275,7 +355,7 @@
     $("#taskNotes").value = task?.notes || "";
     setDueFields(task?.due || "");
     $("#taskImages").value = "";
-    $("#taskListSelect").innerHTML = state.lists.map((list) => `<option value="${escapeHTML(list.id)}">${escapeHTML(list.name)}</option>`).join("");
+    $("#taskListSelect").innerHTML = state.lists.map((l) => `<option value="${escapeHTML(l.id)}">${escapeHTML(l.name)}</option>`).join("");
     $("#taskListSelect").value = task?.listId || currentListId || state.lists[0]?.id || "";
     renderTaskDraftImages();
     $("#taskDialog").showModal();
@@ -283,7 +363,7 @@
   }
 
   function renderTaskDraftImages() {
-    $("#taskAttachmentPreview").innerHTML = taskDraftImages.map((image, index) => `<div class="preview-tile"><img src="${image.data}" alt="Attachment"><button type="button" data-remove-task-image="${index}" aria-label="Remove image">×</button></div>`).join("");
+    $("#taskAttachmentPreview").innerHTML = taskDraftImages.map((img, idx) => `<div class="preview-tile"><img src="${img.data}" alt="Attachment"><button type="button" data-remove-task-image="${idx}" aria-label="Remove image">×</button></div>`).join("");
   }
 
   function openListDialog(list = null) {
@@ -293,7 +373,7 @@
     $("#listName").value = list?.name || "";
     $("#listDescription").value = list?.description || "";
     const selectedColor = list?.color || "#D9E7DA";
-    const radio = $$('input[name="listColor"]').find((input) => input.value === selectedColor) || $('input[name="listColor"][value="#D9E7DA"]');
+    const radio = $$('input[name="listColor"]').find((i) => i.value === selectedColor) || $('input[name="listColor"][value="#D9E7DA"]');
     if (radio) radio.checked = true;
     $("#listCover").value = "";
     $("#coverPreview").classList.toggle("hidden", !listDraftCover);
@@ -301,9 +381,8 @@
     $("#coverPicker").classList.toggle("hidden", !!listDraftCover);
 
     const modalDeleteBtn = $("#modalDeleteListBtn");
-    if (modalDeleteBtn) {
-      modalDeleteBtn.classList.toggle("hidden", !list);
-    }
+    if (modalDeleteBtn) modalDeleteBtn.classList.toggle("hidden", !list);
+    
     $("#listDialog").showModal();
     setTimeout(() => $("#listName").focus(), 50);
   }
@@ -316,20 +395,19 @@
       reader.onload = () => {
         const img = new Image();
         img.onload = () => {
-          const maxSide = 1500;
+          const maxSide = 1400;
           const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
           const canvas = document.createElement("canvas");
           canvas.width = Math.max(1, Math.round(img.width * scale));
           canvas.height = Math.max(1, Math.round(img.height * scale));
-          const context = canvas.getContext("2d");
-          context.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const data = canvas.toDataURL("image/jpeg", .82);
-          resolve({ data, name: file.name, type: "image/jpeg" });
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve({ data: canvas.toDataURL("image/jpeg", 0.8), name: file.name, type: "image/jpeg" });
         };
         img.onerror = () => reject(new Error("This image could not be opened."));
         img.src = reader.result;
       };
-      reader.onerror = () => reject(new Error("Could not read this image."));
+      reader.onerror = () => reject(new Error("Could not read image file."));
       reader.readAsDataURL(file);
     });
   }
@@ -339,10 +417,12 @@
     if (!picked.length) return;
     try {
       const loaded = [];
-      for (const file of picked) loaded.push(await readImage(file));
+      for (const f of picked) loaded.push(await readImage(f));
       setter([...existing, ...loaded]);
-      notify(`${loaded.length} image${loaded.length === 1 ? "" : "s"} added`);
-    } catch (error) { notify(error.message || "Could not add image."); }
+      notify(`${loaded.length} image(s) added`);
+    } catch (e) {
+      notify(e.message || "Could not add image.");
+    }
   }
 
   const webReminderTimers = new Map();
@@ -351,13 +431,17 @@
     if (old) clearTimeout(old);
     if (!task.due || task.done || !("Notification" in window)) return;
     if (Notification.permission !== "granted") {
-      if (Notification.permission === "default") { try { await Notification.requestPermission(); } catch {} }
+      if (Notification.permission === "default") {
+        try { await Notification.requestPermission(); } catch (_) {}
+      }
       if (Notification.permission !== "granted") return;
     }
-    const delay = new Date(task.due).getTime() - Date.now();
+    const dueTime = parseISODate(task.due)?.getTime();
+    if (!dueTime) return;
+    const delay = dueTime - Date.now();
     if (delay <= 0 || delay > 2147480000) return;
     const timer = setTimeout(() => {
-      try { new Notification("Daymark reminder", { body: task.title, icon: "./icon-192.png", tag: `daymark-${task.id}` }); } catch {}
+      try { new Notification("Daymark reminder", { body: task.title, icon: "./icon-192.png", tag: `daymark-${task.id}` }); } catch (_) {}
     }, delay);
     webReminderTimers.set(task.id, timer);
   }
@@ -380,19 +464,18 @@
       createdAt: existingTask?.createdAt || now,
       updatedAt: now
     };
-    if (!data.listId) return notify("Create a list first.");
-    if (editingTaskId) state.tasks = state.tasks.map((task) => task.id === editingTaskId ? data : task);
+
+    if (editingTaskId) state.tasks = state.tasks.map((t) => t.id === editingTaskId ? data : t);
     else state.tasks.unshift(data);
 
     try {
       await persist();
-      if (window.DaymarkNotifications) await window.DaymarkNotifications.schedule(data);
-      else scheduleWebReminder(data);
+      scheduleWebReminder(data);
       $("#taskDialog").close();
       render();
       notify(editingTaskId ? "Task updated" : "Task added");
     } catch {
-      notify("Storage is full. Please remove some large images.");
+      notify("Storage quota exceeded. Please remove some attachments.");
     }
   }
 
@@ -402,7 +485,7 @@
     if (!name) return;
     const color = $('input[name="listColor"]:checked')?.value || "#D9E7DA";
     if (editingListId) {
-      state.lists = state.lists.map((list) => list.id === editingListId ? { ...list, name, description: $("#listDescription").value.trim(), color, cover: listDraftCover } : list);
+      state.lists = state.lists.map((l) => l.id === editingListId ? { ...l, name, description: $("#listDescription").value.trim(), color, cover: listDraftCover } : l);
     } else {
       const list = { id: uid(), name, description: $("#listDescription").value.trim(), color, cover: listDraftCover, createdAt: Date.now() };
       state.lists.push(list);
@@ -415,7 +498,7 @@
       render();
       notify(editingListId ? "List updated" : "List created");
     } catch {
-      notify("Storage is full.");
+      notify("Failed to save list.");
     }
   }
 
@@ -425,7 +508,6 @@
     task.done = done;
     task.updatedAt = Date.now();
     await persist();
-    if (window.DaymarkNotifications) await window.DaymarkNotifications.cancel(id);
     const timer = webReminderTimers.get(id);
     if (timer) clearTimeout(timer);
     render();
@@ -435,8 +517,7 @@
   async function deleteTask(id) {
     const task = taskById(id);
     if (!task || !confirm(`Delete “${task.title}”?`)) return;
-    state.tasks = state.tasks.filter((item) => item.id !== id);
-    if (window.DaymarkNotifications) await window.DaymarkNotifications.cancel(id);
+    state.tasks = state.tasks.filter((t) => t.id !== id);
     const timer = webReminderTimers.get(id);
     if (timer) clearTimeout(timer);
     await persist();
@@ -444,37 +525,23 @@
     notify("Task deleted");
   }
 
-  /* List Deletion with Safety Checks */
-  async function deleteCurrentList() {
-    if (!currentListId) return;
-    const list = listById(currentListId);
-    if (!list) return;
-    const count = countForList(list.id).all;
-    const confirmMessage = count > 0
-      ? `Are you sure you want to delete the list “${list.name}” and its ${count} task(s)? This cannot be undone.`
-      : `Are you sure you want to delete the list “${list.name}”?`;
-    if (!confirm(confirmMessage)) return;
-
-    state.lists = state.lists.filter((item) => item.id !== list.id);
-    state.tasks = state.tasks.filter((task) => task.listId !== list.id);
-    currentListId = null;
-    currentView = "all";
-    await persist();
-    render();
-    notify("List deleted");
-  }
-
   async function deleteListById(id) {
     const list = listById(id);
     if (!list) return;
     const count = countForList(list.id).all;
     const confirmMessage = count > 0
-      ? `Are you sure you want to delete the list “${list.name}” and its ${count} task(s)?`
-      : `Are you sure you want to delete the list “${list.name}”?`;
+      ? `Delete “${list.name}” and its ${count} task(s)? This cannot be undone.`
+      : `Delete “${list.name}”?`;
     if (!confirm(confirmMessage)) return;
 
-    state.lists = state.lists.filter((item) => item.id !== id);
-    state.tasks = state.tasks.filter((task) => task.listId !== id);
+    state.lists = state.lists.filter((l) => l.id !== id);
+    state.tasks = state.tasks.filter((t) => t.listId !== id);
+
+    // Auto-create a default list if user cleared all
+    if (!state.lists.length) {
+      state.lists.push({ id: uid(), name: "Personal", description: "Default space", color: "#D9E7DA", cover: null, createdAt: Date.now() });
+    }
+
     if (currentListId === id) {
       currentListId = null;
       currentView = "all";
@@ -500,17 +567,19 @@
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      if (parsed.format !== "daymark-backup" || !Array.isArray(parsed.lists) || !Array.isArray(parsed.tasks)) throw new Error("This doesn't look like a Daymark backup.");
-      if (!confirm("Import this backup and replace existing lists and tasks?")) return;
+      if (parsed.format !== "daymark-backup" || !Array.isArray(parsed.lists) || !Array.isArray(parsed.tasks)) {
+        throw new Error("Invalid Daymark backup file.");
+      }
+      if (!confirm("Import backup? This will replace your current tasks and lists on this device.")) return;
       state.lists = parsed.lists;
       state.tasks = parsed.tasks;
       currentListId = null;
       currentView = "all";
       await persist();
       render();
-      notify("Backup imported");
-    } catch (error) {
-      notify(error.message || "Could not import backup.");
+      notify("Backup imported successfully");
+    } catch (e) {
+      notify(e.message || "Could not import backup.");
     } finally {
       $("#importFile").value = "";
     }
@@ -546,17 +615,31 @@
       <div class="modal-footer"><button class="secondary-button">Close</button></div>`;
     document.body.appendChild(viewer);
     const close = () => { viewer.close(); viewer.remove(); };
-    viewer.querySelectorAll("button").forEach((button) => button.addEventListener("click", close));
-    viewer.addEventListener("click", (event) => { if (event.target === viewer) close(); });
+    viewer.querySelectorAll("button").forEach((btn) => btn.addEventListener("click", close));
+    viewer.addEventListener("click", (e) => {
+      const rect = viewer.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) close();
+    });
     viewer.showModal();
   }
 
-  /* Global Click Handler */
+  /* Safe Cross-Browser Modal Outside-Click Handler */
+  function setupDialogBackdropClick(dialog) {
+    dialog.addEventListener("click", (e) => {
+      const rect = dialog.getBoundingClientRect();
+      const isInside = (
+        rect.top <= e.clientY &&
+        e.clientY <= rect.top + rect.height &&
+        rect.left <= e.clientX &&
+        e.clientX <= rect.left + rect.width
+      );
+      if (!isInside) dialog.close();
+    });
+  }
+
+  /* Global Events */
   document.addEventListener("click", async (event) => {
-    if (event.target.id === "mobileScrim") {
-      closeSidebar();
-      return;
-    }
+    if (event.target.id === "mobileScrim") { closeSidebar(); return; }
     const sidebarOpen = $("#sidebar").classList.contains("open");
     if (sidebarOpen && !$("#sidebar").contains(event.target) && event.target.id !== "menuButton") {
       closeSidebar();
@@ -564,7 +647,7 @@
     const target = event.target.closest("button, label, a");
     if (!target) return;
     if (target.closest(".topbar-brand")) { event.preventDefault(); return; }
-    if (target.dataset.close) { $("#" + target.dataset.close).close(); return; }
+    if (target.dataset.close) { $("#" + target.dataset.close)?.close(); return; }
     if (target.dataset.view) { setView(target.dataset.view); return; }
     if (target.dataset.listId) {
       currentListId = target.dataset.listId;
@@ -592,9 +675,9 @@
     if (target.id === "addListSide") { openListDialog(); return; }
     if (target.id === "editListButton") { const list = listById(currentListId); if (list) openListDialog(list); return; }
 
-    /* Delete Button on top of Notes & in List Modal */
+    /* Delete Button on top of Notes & inside List Modal */
     if (target.id === "deleteListButton") {
-      await deleteCurrentList();
+      if (currentListId) await deleteListById(currentListId);
       return;
     }
     if (target.id === "modalDeleteListBtn") {
@@ -630,7 +713,7 @@
     if (target.id === "searchButton") { $("#searchRow").classList.remove("hidden"); $("#searchInput").focus(); return; }
     if (target.id === "closeSearch") { $("#searchInput").value = ""; $("#searchRow").classList.add("hidden"); render(); return; }
     if (target.id === "menuButton") { openSidebar(); return; }
-    if (target.id === "workspaceButton") { notify("Your lists are saved privately in this browser."); return; }
+    if (target.id === "workspaceButton") { notify("Stored securely and privately in this browser."); return; }
   });
 
   document.addEventListener("change", async (event) => {
@@ -640,9 +723,9 @@
 
   $("#taskForm").addEventListener("submit", saveTask);
   $("#listForm").addEventListener("submit", saveList);
-  $("#taskImages").addEventListener("change", (event) => handleImages(event.target.files, taskDraftImages, (val) => { taskDraftImages = val; renderTaskDraftImages(); event.target.value = ""; }));
-  $("#listCover").addEventListener("change", async (event) => {
-    const file = event.target.files?.[0];
+  $("#taskImages").addEventListener("change", (e) => handleImages(e.target.files, taskDraftImages, (val) => { taskDraftImages = val; renderTaskDraftImages(); e.target.value = ""; }));
+  $("#listCover").addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
     if (!file) return;
     try {
       listDraftCover = await readImage(file);
@@ -650,10 +733,10 @@
       $("#coverPreview").classList.remove("hidden");
       $("#coverPicker").classList.add("hidden");
     } catch (err) { notify(err.message); }
-    event.target.value = "";
+    e.target.value = "";
   });
-  $("#coverPicker").addEventListener("click", (event) => {
-    if (event.target.closest("input, label")) return;
+  $("#coverPicker").addEventListener("click", (e) => {
+    if (e.target.closest("input, label")) return;
     $("#listCover").click();
   });
   $("#coverPreview").addEventListener("click", () => {
@@ -661,29 +744,24 @@
     $("#coverPreview").classList.add("hidden");
     $("#coverPicker").classList.remove("hidden");
   });
-  $("#importFile").addEventListener("change", (event) => importBackup(event.target.files?.[0]));
+  $("#importFile").addEventListener("change", (e) => importBackup(e.target.files?.[0]));
   $("#searchInput").addEventListener("input", render);
-  $("#taskDialog").addEventListener("click", (e) => { if (e.target === $("#taskDialog")) $("#taskDialog").close(); });
-  $("#listDialog").addEventListener("click", (e) => { if (e.target === $("#listDialog")) $("#listDialog").close(); });
+
+  setupDialogBackdropClick($("#taskDialog"));
+  setupDialogBackdropClick($("#listDialog"));
 
   document.addEventListener("keydown", (event) => {
     const tag = document.activeElement?.tagName;
-    const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(tag) || document.activeElement?.isContentEditable;
-    if (!typing && event.key.toLowerCase() === "n" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const isTyping = ["INPUT", "TEXTAREA", "SELECT"].includes(tag) || document.activeElement?.isContentEditable;
+    if (!isTyping && event.key.toLowerCase() === "n" && !event.metaKey && !event.ctrlKey && !event.altKey) {
       event.preventDefault();
       openTaskDialog();
     }
     if (event.key === "Escape") closeSidebar();
   });
 
-  window.addEventListener("daymark-native-ready", () => { if (db) window.DaymarkNotifications.sync(state.tasks); });
-  load().then(async () => {
+  load().then(() => {
     render();
-    if (window.DaymarkNotifications) await window.DaymarkNotifications.sync(state.tasks);
-    else state.tasks.forEach(scheduleWebReminder);
-  }).catch((error) => {
-    console.error(error);
-    $("#pageTitle").textContent = "Storage unavailable";
-    $("#pageDescription").textContent = "Please enable local storage in your browser settings.";
+    state.tasks.forEach(scheduleWebReminder);
   });
 })();

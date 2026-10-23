@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f7f7f5">
+  <meta name="theme-color" content="#7167f8">
   <meta name="description" content="A calm, minimal personal to-do list with custom lists, covers, and task attachments.">
   <title>Daymark — To-do</title>
+  
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon-192.png">
@@ -27,8 +28,8 @@
         <div id="listNav" class="list-nav"></div>
       </div>
       <div class="sidebar-bottom">
-        <div class="storage-note"><span class="status-dot"></span><span><strong>Saved on this device</strong><small>No account needed</small></span></div>
-        <button class="nav-item" id="backupButton"><span class="nav-icon">↗</span> Export / backup</button>
+        <div class="storage-note"><span class="status-dot"></span><span><strong id="storageStatusText">Saved on this device</strong><small>Private &amp; Offline</small></span></div>
+        <button class="nav-item" id="backupButton"><span class="nav-icon">↗</span> Export backup</button>
         <label class="nav-item import-label"><span class="nav-icon">↙</span> Import backup<input id="importFile" type="file" accept="application/json,.json" hidden></label>
       </div>
     </aside>
@@ -62,7 +63,7 @@
           <button class="icon-button small" id="closeSearch" aria-label="Close search">×</button>
         </div>
 
-        <!-- List Hero Top Banner above the Notes & Tasks -->
+        <!-- Top List Hero with Delete & Edit controls on top of Notes -->
         <section id="listHero" class="list-hero hidden">
           <div class="hero-image" id="heroImage"></div>
           <div class="hero-shade"></div>
@@ -73,7 +74,6 @@
               <h2 id="heroTitle">My list</h2>
               <p id="heroSubtitle">A place for what matters.</p>
             </div>
-            <!-- Action buttons on top of notes to edit & delete the list -->
             <div class="hero-actions">
               <button class="glass-button" id="editListButton" title="Edit list name or color">✎ Edit list</button>
               <button class="glass-button danger-glass" id="deleteListButton" title="Delete this list">🗑 Delete list</button>
@@ -91,15 +91,18 @@
         </div>
 
         <div class="task-list" id="taskList"></div>
+        
         <div class="empty-state" id="emptyState">
           <div class="empty-illustration"><span>✓</span></div>
           <h3 id="emptyTitle">A clear space to begin</h3>
           <p id="emptyDescription">Add a task and turn your plans into progress.</p>
           <button class="secondary-button" id="emptyAddButton">＋ Add your first task</button>
         </div>
+
         <button class="add-task-row" id="addTaskRow"><span class="add-circle">＋</span><span>Add a task</span><kbd>N</kbd></button>
+
         <footer class="page-footer">
-          <span>Made for a little more clarity.</span>
+          <span>Made for clarity and focus.</span>
           <span class="footer-privacy"><span class="footer-dot"></span> Private by design · Stored locally</span>
           <div class="creator-links" aria-label="Credits and links">
             <span class="creator-credit">Crafted with care by <strong>Krishna</strong></span>
@@ -113,7 +116,7 @@
 
   <div class="mobile-scrim" id="mobileScrim"></div>
 
-  <!-- Task Dialog with Modern Schedule & Time Box -->
+  <!-- Task Dialog -->
   <dialog class="modal" id="taskDialog">
     <form id="taskForm" method="dialog">
       <div class="modal-header">
@@ -133,7 +136,7 @@
       <label class="field-label" for="taskListSelect">Save to list</label>
       <select class="text-field" id="taskListSelect"></select>
 
-      <!-- Clean & Fixed Due Date and Time Box -->
+      <!-- Reliable Schedule & Time Box -->
       <div class="schedule-box">
         <div class="schedule-box-header">
           <span class="schedule-icon">⏰</span>
@@ -180,7 +183,7 @@
     </form>
   </dialog>
 
-  <!-- List Dialog with Delete Option -->
+  <!-- List Dialog -->
   <dialog class="modal" id="listDialog">
     <form id="listForm" method="dialog">
       <div class="modal-header">
@@ -197,7 +200,7 @@
       <label class="field-label" for="listDescription">Description <span class="optional">Optional</span></label>
       <input class="text-field" id="listDescription" maxlength="180" placeholder="What is this list for?">
 
-      <label class="field-label">Theme accent color</label>
+      <label class="field-label">Theme color</label>
       <div class="color-options" id="colorOptions">
         <label><input type="radio" name="listColor" value="#D9E7DA" checked><span style="--swatch:#D9E7DA"></span></label>
         <label><input type="radio" name="listColor" value="#DCE7F8"><span style="--swatch:#DCE7F8"></span></label>
@@ -224,11 +227,13 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
   <script src="./app.js"></script>
-  <script type="module" src="./native-notifications.js"></script>
   <script>
-    if ("serviceWorker" in navigator && location.protocol !== "file:") {
-      window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+    if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js").catch(() => {});
+      });
     }
   </script>
 </body>
